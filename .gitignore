@@ -39,4 +39,6 @@ bin
 
 # Others
 *.ps1
-*.zip"bin/build/" 
+*.zip
+/bin/
+/build/
