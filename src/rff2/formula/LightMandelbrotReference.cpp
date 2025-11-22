@@ -1,5 +1,6 @@
 //
 // Created by Merutilm on 2025-05-09.
+// Created by Super Fractal on 2025-11-22.
 //
 
 #include "LightMandelbrotReference.h"
