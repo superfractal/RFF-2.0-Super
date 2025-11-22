@@ -4,6 +4,7 @@
 
 #pragma once
 #include <vector>
+#include <algorithm>
 
 #include "ArrayCompressionTool.h"
 #include "ArrayCompressor.h"
@@ -13,7 +14,6 @@
 #include "../data/ApproxTableCache.h"
 #include "../attr/FrtMPACompressionMethod.h"
 #include "../constants/Constants.hpp"
-#include <algorithm>
 
 #include "../../vulkan_helper/util/BufferImageUtils.hpp"
 #include "../../vulkan_helper/core/logger.hpp"
@@ -50,8 +50,9 @@ namespace merutilm::rff2 {
         void generateTable(const ParallelRenderState &state, const Ref &reference, Num dcMax,
                            std::function<void(uint64_t, double)> &&actionPerCreatingTableIteration);
 
+        // 【修正】std::vector -> SegmentedVector に変更
         template<typename PAB>
-        void allocateTableSize(std::vector<std::vector<PAB> > &table, uint64_t index, uint64_t levels);
+        void allocateTableSize(SegmentedVector<std::vector<PAB> > &table, uint64_t index, uint64_t levels);
 
         /**
          * Gets the pulled table index of MPA Table.
@@ -78,13 +79,8 @@ namespace merutilm::rff2 {
         virtual size_t getLength() = 0;
     };
 
-    // DEFINITION OF MPA TABLE  DEFINITION OF MPA TABLE  DEFINITION OF MPA TABLE  DEFINITION OF MPA TABLE  DEFINITION OF MPA TABLE  DEFINITION OF MPA TABLE
-    // DEFINITION OF MPA TABLE  DEFINITION OF MPA TABLE  DEFINITION OF MPA TABLE  DEFINITION OF MPA TABLE  DEFINITION OF MPA TABLE  DEFINITION OF MPA TABLE
-    // DEFINITION OF MPA TABLE  DEFINITION OF MPA TABLE  DEFINITION OF MPA TABLE  DEFINITION OF MPA TABLE  DEFINITION OF MPA TABLE  DEFINITION OF MPA TABLE
-    // DEFINITION OF MPA TABLE  DEFINITION OF MPA TABLE  DEFINITION OF MPA TABLE  DEFINITION OF MPA TABLE  DEFINITION OF MPA TABLE  DEFINITION OF MPA TABLE
-    // DEFINITION OF MPA TABLE  DEFINITION OF MPA TABLE  DEFINITION OF MPA TABLE  DEFINITION OF MPA TABLE  DEFINITION OF MPA TABLE  DEFINITION OF MPA TABLE
-
-
+    // DEFINITION OF MPA TABLE
+    
     template<typename Ref, typename Num>
     MPATable<Ref, Num>::MPATable(const ParallelRenderState &state, const Ref &reference,
                                  const FrtMPAAttribute *mpaSettings, const Num &dcMax,
@@ -130,10 +126,6 @@ namespace merutilm::rff2 {
             const uint64_t start = tool.start;
             const uint64_t length = tool.range();
             const uint64_t index = binarySearch(tablePeriod, length + 1);
-
-            // Check if the reference compressor is same as period.
-            // However, The Computer doesn't know whether the compressor's length came from skipping to the periodic point, or being cut off in the middle.
-            // So, Do check tableIndex too.
 
             if (const uint64_t tableIndex = iterationToPulledTableIndex(*mpaPeriod, start);
                 index != UINT64_MAX &&
@@ -183,13 +175,16 @@ namespace merutilm::rff2 {
             return;
         }
 
-        std::vector<std::vector<PAB> > *tablePtr;
+        // 【修正】std::vector/deque -> SegmentedVector に変更
+        SegmentedVector<std::vector<PAB> > *tablePtr;
         if constexpr (std::is_same_v<LightPA, PAB>) {
             tablePtr = &tableRef.lightTable;
         } else {
             tablePtr = &tableRef.deepTable;
         }
-        std::vector<std::vector<PAB> > &table = *tablePtr;
+        
+        // 【修正】SegmentedVector型参照
+        auto &table = *tablePtr;
 
         const auto &tablePeriod = mpaPeriod->tablePeriod;
         const uint64_t longestPeriod = tablePeriod.back();
@@ -203,24 +198,95 @@ namespace merutilm::rff2 {
 
         const double epsilon = pow(10, epsilonPower);
         uint64_t iteration = 1;
-        uint64_t absIteration = 0;
 
         const size_t levels = tablePeriod.size();
         auto periodCount = std::vector<uint64_t>(levels, 0);
 
         auto currentPA = std::vector<std::unique_ptr<PAG> >(levels);
+        auto dpTableTemps = std::array<dex, 8>();
+
+        // 【修正】std::ranges::for_each は自作クラスのイテレータ非対応のため、インデックスループに変更
+        for (size_t i = 0; i < table.size(); ++i) {
+            table[i].clear();
+        }
+
+    // ========================================================================================================
+    // OPTIMIZATION: Fast Path for NO_COMPRESSION
+    // ========================================================================================================
+    if (mpaCompressionMethod == FrtMPACompressionMethod::NO_COMPRESSION) {
+        
+        // SegmentedVectorのreserveを呼んでおく（API互換・管理領域のみ確保）
+        if (table.capacity() <= longestPeriod) {
+            table.reserve(longestPeriod + 1);
+        }
+
+        uint64_t absIteration = 0;
+
+        while (iteration <= longestPeriod) {
+            if (absIteration % Constants::Fractal::EXIT_CHECK_INTERVAL == 0 && state.interruptRequested()) return;
+
+            func(iteration, static_cast<double>(iteration) / static_cast<double>(longestPeriod));
+
+            bool resetLowerLevel = false;
+
+            for (uint64_t level = levels; level > 0; --level) {
+                const uint64_t i = level - 1;
+                
+                if (periodCount[i] == 0) {
+                    if constexpr (std::is_same_v<PAG, LightPAGenerator>) {
+                        currentPA[i] = LightPAGenerator::create(reference, epsilon, dcMax, iteration);
+                    } else {
+                        currentPA[i] = DeepPAGenerator::create(reference, epsilon, dcMax, iteration, dpTableTemps);
+                    }
+                }
+
+                if (currentPA[i] != nullptr && periodCount[i] + REQUIRED_PERTURBATION < tablePeriod[i]) {
+                    currentPA[i]->step();
+                }
+
+                periodCount[i]++;
+
+                if (periodCount[i] == tablePeriod[i]) {
+                    if (const PAG *currentLevel = currentPA[i].get();
+                        currentLevel != nullptr &&
+                        currentLevel->getSkip() == tablePeriod[i] - REQUIRED_PERTURBATION
+                    ) {
+                        const uint64_t storeIndex = currentLevel->getStart();
+                        
+                        // 必要に応じて拡張
+                        while (table.size() <= storeIndex) {
+                            table.emplace_back();
+                        }
+
+                        table[storeIndex].push_back(currentLevel->build());
+                    }
+                    currentPA[i] = nullptr;
+                    resetLowerLevel = true;
+                }
+
+                if (resetLowerLevel) {
+                    periodCount[i] = 0;
+                }
+            }
+            ++iteration;
+            ++absIteration;
+        }
+        return; // End of Fast Path
+    }
+
+
+        // ========================================================================================================
+        // STANDARD PATH (Compression Enabled)
+        // ========================================================================================================
+
+        uint64_t absIteration = 0;
 
         const uint64_t size = iterationToCompTableIndex(mpaCompressionMethod, *mpaPeriod, pulledMPACompressor,
                                                         longestPeriod + 1);
 
-        std::ranges::for_each(table, [](auto &v) {
-            v.clear();
-        });
-
         table.reserve(size);
         allocateTableSize<PAB>(table, 0, levels);
-        const std::vector<PAB> &mainReferenceMPA = table[0];
-        auto dpTableTemps = std::array<dex, 8>();
+        const std::vector<PAB> &mainReferenceMPA = table[0]; // unique_ptr管理なのでリサイズされても安全
 
 
         while (iteration <= longestPeriod) {
@@ -238,7 +304,6 @@ namespace merutilm::rff2 {
                 containedTool->start == pulledTableIndex + 1
             ) {
                 const uint64_t level = binarySearch(tableElements, containedTool->end - containedTool->start + 2);
-                //count itself and periodic point, +2
 
                 const uint64_t compTableIndex = iterationToCompTableIndex(mpaCompressionMethod, *mpaPeriod,
                                                                           pulledMPACompressor, iteration);
@@ -342,8 +407,6 @@ namespace merutilm::rff2 {
                         auto &pa = table[compTableIndex];
                         pa.push_back(currentLevel->build());
                     }
-                    //Stop all lower level iteration for efficiency
-                    //because it is too hard to skipping to next part of the periodic point
                     currentPA[i] = nullptr;
                     resetLowerLevel = true;
                 }
@@ -359,34 +422,6 @@ namespace merutilm::rff2 {
 
     template<typename Ref, typename Num>
     uint64_t MPATable<Ref, Num>::iterationToPulledTableIndex(const MPAPeriod &mpaPeriod, const uint64_t iteration) {
-        //
-        // get index <=> Inverse calculation of index compression
-        // First approach : check the remainder == 1
-        //
-        // [3, 11, 26]
-        // 1 4 7 12 15 18 23 27 30 33 38
-        //
-        // test input : 23
-        // search period : period 11
-        // 23 % 11 = 1, 23/11 = 2.xxx(3*2 elements)
-        // 1 % 3 = 1, 1/3 = 0.xxx(1*0 elements)
-        // result = 3*2=6
-        //
-        // test input : 30
-        // search period : period 26
-        // 30 % 26 = 4, 30/26 = 1.xxx(7*1 elements)
-        // 4 % 3 = 1, 4/3 = 1.xxx(1 element)
-        // result = 7*1+1=8
-        //
-        // test input : 29
-        // search period : period 26
-        // 29 % 26 = 3, 29/26 = 1.xxx(7*1 elements)
-        // 3 % 3 = 0, 3/3 = 1.xxx(1 element)
-        // result = UINT64_MAX (last remainder is not one)
-        //
-        //
-        //
-
         if (iteration == 0) {
             return UINT64_MAX;
         }
@@ -401,15 +436,9 @@ namespace merutilm::rff2 {
             if (remainder < tablePeriod[i - 1]) {
                 continue;
             }
-            // p[4, 1000]
-            // 1 5 9 13 .... 993 997 1001
-            // 997 % 1000 = 997
-            // 997 % 4 = 1
-            // 997 + 4 - 2 + 1 = 1000
             if (i < tablePeriod.size() && remainder + tablePeriod[0] - REQUIRED_PERTURBATION +
                 1 > tablePeriod[i]) {
                 return UINT64_MAX;
-                //Insufficient length, ("Pulled Table Index" must be skipped for at least "shortest period")
             }
 
 
@@ -437,9 +466,10 @@ namespace merutilm::rff2 {
         }
     }
 
+    // 【修正】SegmentedVectorに対応
     template<typename Ref, typename Num>
     template<typename PAB>
-    void MPATable<Ref, Num>::allocateTableSize(std::vector<std::vector<PAB> > &table, const uint64_t index,
+    void MPATable<Ref, Num>::allocateTableSize(SegmentedVector<std::vector<PAB> > &table, const uint64_t index,
                                                const uint64_t levels) {
         while (table.size() < index) {
             table.emplace_back();

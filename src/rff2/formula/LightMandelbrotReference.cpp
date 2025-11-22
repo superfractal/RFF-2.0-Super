@@ -45,8 +45,17 @@ namespace merutilm::rff2 {
             return Constants::NullPointer::PROCESS_TERMINATED_REFERENCE;
         }
 
+        // Moved maxIteration declaration up to use it for reservation
+        uint64_t maxIteration = calc.maxIteration;
+
         auto rr = std::vector<double>();
         auto ri = std::vector<double>();
+
+        // Reserve memory to prevent reallocations during push_back
+        // +1 covers the initial (0,0) push
+        rr.reserve(maxIteration + 1);
+        ri.reserve(maxIteration + 1);
+
         rr.push_back(0);
         ri.push_back(0);
 
@@ -71,7 +80,7 @@ namespace merutilm::rff2 {
 
         auto tools = std::vector<ArrayCompressionTool>();
         uint64_t compressed = 0;
-        uint64_t maxIteration = calc.maxIteration;
+        
         auto [compressCriteria, compressionThresholdPower, withoutNormalize] = calc.referenceCompAttribute;
         auto func = std::move(actionPerRefCalcIteration);
         double compressionThreshold = compressionThresholdPower <= 0 ? 0 : pow(10, -compressionThresholdPower);
@@ -179,8 +188,8 @@ namespace merutilm::rff2 {
             if (compressCriteria == 0 || reuseIndex <= compressCriteria) {
                 if (const uint64_t index = iteration - compressed;
                     index == rr.size()) {
-                    rr.push_back(zr);
-                    ri.push_back(zi);
+                    rr.push_back(zr); // No reallocation here thanks to reserve
+                    ri.push_back(zi); // No reallocation here thanks to reserve
                 } else {
                     rr[index] = zr;
                     ri[index] = zi;
@@ -194,6 +203,7 @@ namespace merutilm::rff2 {
 
         rr.resize(period - compressed + 1);
         ri.resize(period - compressed + 1);
+        // shrink_to_fit will remove the excess capacity we reserved if compression occurred
         rr.shrink_to_fit();
         ri.shrink_to_fit();
         periodArray = periodArray.empty() ? std::vector(1, period) : periodArray;
