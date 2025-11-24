@@ -1,6 +1,6 @@
 //
 // Created by Merutilm on 2025-05-18.
-// Created by Super Fractal on 2025-11-22.
+// Created by Super Fractal on 2025-11-24.
 //
 
 #pragma once
@@ -12,6 +12,7 @@
 #include "DeepPAGenerator.h"
 #include "LightPAGenerator.h"
 #include "MPAPeriod.h"
+#include "SegmentedVector.h" 
 #include "../data/ApproxTableCache.h"
 #include "../attr/FrtMPACompressionMethod.h"
 #include "../constants/Constants.hpp"
@@ -217,9 +218,9 @@ namespace merutilm::rff2 {
     if (mpaCompressionMethod == FrtMPACompressionMethod::NO_COMPRESSION) {
         
         // SegmentedVectorのreserveを呼んでおく（API互換・管理領域のみ確保）
-        if (table.capacity() <= longestPeriod) {
-            table.reserve(longestPeriod + 1);
-        }
+        //if (table.capacity() <= longestPeriod) {
+            //table.reserve(longestPeriod + 1);
+        //}
 
         uint64_t absIteration = 0;
 
@@ -285,7 +286,7 @@ namespace merutilm::rff2 {
         const uint64_t size = iterationToCompTableIndex(mpaCompressionMethod, *mpaPeriod, pulledMPACompressor,
                                                         longestPeriod + 1);
 
-        table.reserve(size);
+        //table.reserve(size);
         allocateTableSize<PAB>(table, 0, levels);
         const std::vector<PAB> &mainReferenceMPA = table[0]; // unique_ptr管理なのでリサイズされても安全
 

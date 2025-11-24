@@ -16,8 +16,8 @@ namespace merutilm::rff2 {
         double bnr;
         double bni;
         double radius;
-        const std::vector<double> &refReal;
-        const std::vector<double> &refImag;
+        const SegmentedVector<double>& refReal;
+        const SegmentedVector<double>& refImag;
         double dcMax;
 
     public:

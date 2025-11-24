@@ -1,5 +1,6 @@
 //
 // Created by Merutilm on 2025-08-08.
+// Created by Super Fractal on 2025-11-24.
 //
 
 #include "Application.hpp"
@@ -77,7 +78,7 @@ namespace merutilm::rff2 {
         masterWindow = CreateWindowExW(
             0,
             Constants::Win32::CLASS_MASTER_WINDOW,
-            L"RFF 2.0",
+            L"RFF 2.0 Super",
             WS_OVERLAPPEDWINDOW | WS_SYSMENU,
             CW_USEDEFAULT,
             CW_USEDEFAULT,

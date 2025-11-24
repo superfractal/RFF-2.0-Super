@@ -52,6 +52,7 @@ add_executable(
         src/rff2/calc/rff_math.h
         src/rff2/mrthy/ArrayCompressionTool.h
         src/rff2/mrthy/ArrayCompressor.h
+		src/rff2/mrthy/SegmentedVector.h
         src/rff2/parallel/ParallelArrayDispatcher.h
         src/rff2/ui/Utilities.h
         src/rff2/formula/LightMandelbrotPerturbator.cpp

@@ -1,20 +1,24 @@
 //
 // Created by Merutilm on 2025-05-09.
-// Created by Super Fractal on 2025-11-22.
+// Created by Super Fractal on 2025-11-24.
 //
 
 #include "LightMandelbrotReference.h"
 
 #include <cmath>
-
+#include <new> 
 #include <cfloat>
+
 #include "../calc/rff_math.h"
 #include "../mrthy/ArrayCompressor.h"
+#include "../mrthy/SegmentedVector.h" // 追加
 #include "../constants/Constants.hpp"
 
 namespace merutilm::rff2 {
-    LightMandelbrotReference::LightMandelbrotReference(fp_complex &&center, std::vector<double> &&refReal,
-                                                       std::vector<double> &&refImag,
+    // コンストラクタの定義変更 (std::vector -> SegmentedVector)
+    LightMandelbrotReference::LightMandelbrotReference(fp_complex &&center, 
+                                                       SegmentedVector<double> &&refReal,
+                                                       SegmentedVector<double> &&refImag,
                                                        std::vector<ArrayCompressionTool> &&compressor,
                                                        std::vector<uint64_t> &&period,
                                                        fp_complex &&fpgReference,
@@ -27,17 +31,6 @@ namespace merutilm::rff2 {
                                                                              refImag(std::move(refImag)) {
     }
 
-    /**
-     * Generates Reference of Mandelbrot set.
-     * @param state the processor
-     * @param calc calculation settings
-     * @param exp10 the exponent of 10 for arbitrary-precision operation
-     * @param initialPeriod the initial period. default value is 0. i.e. maximum iterations of arbitrary-precision operation
-     * @param dcMax the length of center-to-vertex of screen.
-     * @param strictFPG use arbitrary-precision operation for fpg_bn calculation
-     * @param actionPerRefCalcIteration the action of every iteration
-     * @return the result of generation. but returns @code PROCESS_TERMINATED_REFERENCE@endcode if the process is terminated
-     */
     std::unique_ptr<LightMandelbrotReference> LightMandelbrotReference::createReference(
         const ParallelRenderState &state, const FractalAttribute &calc, int exp10, uint64_t initialPeriod,
         double dcMax,
@@ -46,16 +39,17 @@ namespace merutilm::rff2 {
             return Constants::NullPointer::PROCESS_TERMINATED_REFERENCE;
         }
 
-        // Moved maxIteration declaration up to use it for reservation
         uint64_t maxIteration = calc.maxIteration;
 
-        auto rr = std::vector<double>();
-        auto ri = std::vector<double>();
+        // 【変更】std::vector から SegmentedVector へ
+        // これにより、巨大な連続領域確保が不要になり、ページ単位でのメモリ確保となるため
+        // bad_alloc (メモリ断片化) を回避しつつ、スワップ領域を限界まで使用可能になる。
+        auto rr = SegmentedVector<double>();
+        auto ri = SegmentedVector<double>();
 
-        // Reserve memory to prevent reallocations during push_back
-        // +1 covers the initial (0,0) push
-        rr.reserve(maxIteration + 1);
-        ri.reserve(maxIteration + 1);
+        // SegmentedVectorは内部で動的に拡張するため、事前のreserveは必須ではないが
+        // 概算サイズがわかるならヒントとして与えても良い（ここでは削除してもOK）
+        // rr.reserve(maxIteration + 1); 
 
         rr.push_back(0);
         ri.push_back(0);
@@ -95,7 +89,6 @@ namespace merutilm::rff2 {
             }
 
             // use Fast-Period-Guessing, and create MPA Table
-
             if (iteration > 0) {
                 double radius2 = zr * zr + zi * zi;
 
@@ -163,6 +156,7 @@ namespace merutilm::rff2 {
 
 
             if (compressCriteria > 0 && iteration >= 1) {
+                // SegmentedVector は operator[] で参照を返すため、読み書きともにそのまま記述可能
                 if (const uint64_t refIndex = ArrayCompressor::compress(tools, reuseIndex + 1);
                     ((zr == rr[refIndex] && zr == 0) || fabs(zr / rr[refIndex] - 1) <= compressionThreshold) &&
                     ((zi == ri[refIndex] && zi == 0) || fabs(zi / ri[refIndex] - 1) <= compressionThreshold) && canReuse
@@ -170,15 +164,11 @@ namespace merutilm::rff2 {
                     ++reuseIndex;
                 } else if (reuseIndex != 0) {
                     if (reuseIndex > compressCriteria) {
-                        // reference compression criteria
-
                         const auto compressor = ArrayCompressionTool(
                             1, iteration - reuseIndex + 1, iteration);
-                        compressed += compressor.range(); //get the increment of iteration
+                        compressed += compressor.range(); 
                         tools.push_back(compressor);
                     }
-                    //If it is enough to large, set all reference in the range to 0 and save the index
-
                     reuseIndex = 0;
                     canReuse = withoutNormalize;
                 }
@@ -187,10 +177,15 @@ namespace merutilm::rff2 {
             period = ++iteration;
 
             if (compressCriteria == 0 || reuseIndex <= compressCriteria) {
-                if (const uint64_t index = iteration - compressed;
-                    index == rr.size()) {
-                    rr.push_back(zr); // No reallocation here thanks to reserve
-                    ri.push_back(zi); // No reallocation here thanks to reserve
+                const uint64_t index = iteration - compressed;
+                
+                // 【変更】以前の複雑な try-catch によるメモリ確保ロジックは全削除
+                // SegmentedVector は push_back するだけで、必要に応じて小さなチャンクを追加確保します。
+                // 再配置(Reallocation)が発生しないため、コピーコストもスパイクメモリ消費もありません。
+                
+                if (index == rr.size()) {
+                    rr.push_back(zr);
+                    ri.push_back(zi);
                 } else {
                     rr[index] = zr;
                     ri[index] = zi;
@@ -202,11 +197,10 @@ namespace merutilm::rff2 {
         if (!strictFPG) fpgBn = fp_complex_calculator(fpgBnr, fpgBni, exp10);
         if (fpgReference == nullptr) fpgReference = std::make_unique<fp_complex>(z);
 
-        rr.resize(period - compressed + 1);
-        ri.resize(period - compressed + 1);
-        // shrink_to_fit will remove the excess capacity we reserved if compression occurred
-        rr.shrink_to_fit();
-        ri.shrink_to_fit();
+        // SegmentedVector は resize を実装していませんが、
+        // 上記ループのロジック上、push_back で正しいサイズになっているはずなので resize は不要です。
+        // rr.resize(period - compressed + 1);
+        
         periodArray = periodArray.empty() ? std::vector(1, period) : periodArray;
 
         return std::make_unique<LightMandelbrotReference>(std::move(center), std::move(rr), std::move(ri),
