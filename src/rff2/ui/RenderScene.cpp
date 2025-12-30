@@ -545,7 +545,7 @@ namespace merutilm::rff2 {
         if (state.interruptRequested()) return false;
 
         setStatusMessage(Constants::Status::ZOOM_STATUS,
-                         std::format(L"Z : {:.02f}E{:d}", pow(10, fmod(logZoom, 1)), static_cast<int>(logZoom)));
+                         std::format(L"Z : {:.06f}E{:d}", pow(10, fmod(logZoom, 1)), static_cast<int>(logZoom)));
 
         const std::array<dex, 2> offset = offsetConversion(attr, 0, 0);
         dex dcMax = dex::ZERO;

@@ -74,7 +74,6 @@ add_executable(
         src/rff2/ui/CallbackRender.hpp
         src/rff2/ui/CallbackShader.cpp
         src/rff2/ui/CallbackShader.hpp
-		src/rff2/ui/DarkTheme.hpp
         src/rff2/locator/MandelbrotLocator.cpp
         src/rff2/locator/MandelbrotLocator.h
         src/rff2/ui/CallbackExplore.cpp
@@ -364,7 +363,6 @@ target_link_libraries(RFF PRIVATE
         gmp
         # Win32 Linker
         comctl32
-		dwmapi
         # OpenCV Linkers
         opencv_core
         opencv_imgcodecs
