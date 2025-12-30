@@ -1,9 +1,10 @@
-//
+// MPATable.h
 // Created by Merutilm on 2025-05-18.
 // Created by Super Fractal on 2025-11-24.
-//
+// Modified to use thread-safe SparseVector
 
 #pragma once
+
 #include <vector>
 #include <algorithm>
 
@@ -12,16 +13,16 @@
 #include "DeepPAGenerator.h"
 #include "LightPAGenerator.h"
 #include "MPAPeriod.h"
-#include "SegmentedVector.h" 
+#include "SparseVector.h"
 #include "../data/ApproxTableCache.h"
 #include "../attr/FrtMPACompressionMethod.h"
 #include "../constants/Constants.hpp"
-
 #include "../../vulkan_helper/util/BufferImageUtils.hpp"
 #include "../../vulkan_helper/core/logger.hpp"
 #include "../ui/Utilities.h"
 
 namespace merutilm::rff2 {
+
     template<typename Ref, typename Num>
     struct MPATable {
         static constexpr int REQUIRED_PERTURBATION = 2;
@@ -37,7 +38,6 @@ namespace merutilm::rff2 {
                           std::function<void(uint64_t, double)> &&
                           actionPerCreatingTableIteration);
 
-
         virtual ~MPATable() = default;
 
     protected:
@@ -52,9 +52,6 @@ namespace merutilm::rff2 {
         void generateTable(const ParallelRenderState &state, const Ref &reference, Num dcMax,
                            std::function<void(uint64_t, double)> &&actionPerCreatingTableIteration);
 
-        template<typename PAB>
-        void allocateTableSize(SegmentedVector<std::vector<PAB> > &table, uint64_t index, uint64_t levels);
-
         static uint64_t iterationToPulledTableIndex(const MPAPeriod &mpaPeriod, uint64_t iteration);
 
         static uint64_t iterationToCompTableIndex(const FrtMPACompressionMethod &mpaCompressionMethod,
@@ -66,20 +63,25 @@ namespace merutilm::rff2 {
         virtual size_t getLength() = 0;
     };
 
-    // DEFINITION OF MPA TABLE
-    
+    // ========================================================================
+    // IMPLEMENTATION
+    // ========================================================================
+
     template<typename Ref, typename Num>
     MPATable<Ref, Num>::MPATable(const ParallelRenderState &state, const Ref &reference,
                                  const FrtMPAAttribute *mpaSettings, const Num &dcMax,
                                  ApproxTableCache &tableRef,
                                  std::function<void(uint64_t, double)> &&
-                                 actionPerCreatingTableIteration) : mpaSettings(*mpaSettings), tableRef(tableRef) {
+                                 actionPerCreatingTableIteration)
+         : mpaSettings(*mpaSettings), tableRef(tableRef) {
         initTable(reference);
+
         if constexpr (std::is_same_v<Ref, LightMandelbrotReference>) {
             generateTable<LightPA, LightPAGenerator>(state, reference, dcMax,
                                                      std::move(actionPerCreatingTableIteration));
         } else {
-            generateTable<DeepPA, DeepPAGenerator>(state, reference, dcMax, std::move(actionPerCreatingTableIteration));
+            generateTable<DeepPA, DeepPAGenerator>(state, reference, dcMax,
+                                                    std::move(actionPerCreatingTableIteration));
         }
     }
 
@@ -88,8 +90,7 @@ namespace merutilm::rff2 {
         const auto &referencePeriod = reference.period;
         const uint64_t longestPeriod = reference.longestPeriod();
 
-        if (const int minSkip = mpaSettings.minSkipReference;
-            longestPeriod < minSkip) {
+        if (const int minSkip = mpaSettings.minSkipReference; longestPeriod < minSkip) {
             this->pulledMPACompressor = std::vector<ArrayCompressionTool>();
             return;
         }
@@ -105,24 +106,24 @@ namespace merutilm::rff2 {
     std::vector<ArrayCompressionTool> MPATable<Ref, Num>::createPulledMPACompressor(
         const std::vector<ArrayCompressionTool> &referenceCompressor) const {
         std::vector<ArrayCompressionTool> mpaTools;
+
         auto &tablePeriod = mpaPeriod->tablePeriod;
         auto &tablePeriodElements = mpaPeriod->tableElements;
         auto &isArtificial = mpaPeriod->isArtificial;
 
-        for (ArrayCompressionTool tool: referenceCompressor) {
+        for (ArrayCompressionTool tool : referenceCompressor) {
             const uint64_t start = tool.start;
             const uint64_t length = tool.range();
             const uint64_t index = binarySearch(tablePeriod, length + 1);
-
             if (const uint64_t tableIndex = iterationToPulledTableIndex(*mpaPeriod, start);
                 index != UINT64_MAX &&
                 tableIndex != UINT64_MAX &&
-                !isArtificial[index]
-            ) {
+                !isArtificial[index]) {
                 const uint64_t periodElements = tablePeriodElements[index];
                 mpaTools.emplace_back(1, tableIndex + 1, tableIndex + periodElements - 1);
             }
         }
+
         return mpaTools;
     }
 
@@ -137,23 +138,25 @@ namespace merutilm::rff2 {
 
         while (low <= high) {
             const uint64_t mid = (low + high) >> 1;
-            if (const uint64_t value = arr[mid];
-                value < key
-            ) {
+            if (const uint64_t value = arr[mid]; value < key) {
                 low = mid + 1;
             } else if (value > key) {
                 if (mid == 0) {
                     return UINT64_MAX;
                 }
                 high = mid - 1;
-            } else return mid;
+            } else {
+                return mid;
+            }
         }
+
         return UINT64_MAX;
     }
 
     template<typename Ref, typename Num>
     template<typename PAB, typename PAG>
-    void MPATable<Ref, Num>::generateTable(const ParallelRenderState &state, const Ref &reference, Num dcMax,
+    void MPATable<Ref, Num>::generateTable(const ParallelRenderState &state, const Ref &reference,
+                                            Num dcMax,
                                            std::function<void(uint64_t, double)> &&actionPerCreatingTableIteration) {
         const auto func = std::move(actionPerCreatingTableIteration);
         initTable(reference);
@@ -162,13 +165,14 @@ namespace merutilm::rff2 {
             return;
         }
 
-        // SegmentedVectorへの参照
-        SegmentedVector<std::vector<PAB> > *tablePtr;
+        SparseVector<std::vector<PAB>> *tablePtr;
+
         if constexpr (std::is_same_v<LightPA, PAB>) {
             tablePtr = &tableRef.lightTable;
         } else {
             tablePtr = &tableRef.deepTable;
         }
+
         auto &table = *tablePtr;
 
         const auto &tablePeriod = mpaPeriod->tablePeriod;
@@ -183,33 +187,24 @@ namespace merutilm::rff2 {
 
         const double epsilon = pow(10, epsilonPower);
         uint64_t iteration = 1;
-
         const size_t levels = tablePeriod.size();
         auto periodCount = std::vector<uint64_t>(levels, 0);
-
-        auto currentPA = std::vector<std::unique_ptr<PAG> >(levels);
+        auto currentPA = std::vector<std::unique_ptr<PAG>>(levels);
         auto dpTableTemps = std::array<dex, 8>();
 
-        for (size_t i = 0; i < table.size(); ++i) {
-            table[i].clear();
-        }
+        table.clear();
 
-        // ========================================================================================================
-        // OPTIMIZATION: Fast Path for NO_COMPRESSION
-        // ========================================================================================================
+        // ============================================================================
+        // NO_COMPRESSION 
+        // ============================================================================
         if (mpaCompressionMethod == FrtMPACompressionMethod::NO_COMPRESSION) {
-            
-            // 【重要修正 1】 外側のコンテナのみ予約する
-            // これによりSegmentedVectorのセグメント管理領域の断片化を防ぎます。
-            // データ自体の領域(inner vector)は予約しないので、メモリ使用量は増えません。
-            if (table.capacity() <= longestPeriod) {
-                table.reserve(longestPeriod + 1);
-            }
-
             uint64_t absIteration = 0;
 
             while (iteration <= longestPeriod) {
-                if (absIteration % Constants::Fractal::EXIT_CHECK_INTERVAL == 0 && state.interruptRequested()) return;
+                if (absIteration % Constants::Fractal::EXIT_CHECK_INTERVAL == 0 && 
+                    state.interruptRequested()) {
+                    return;
+                }
 
                 func(iteration, static_cast<double>(iteration) / static_cast<double>(longestPeriod));
 
@@ -217,16 +212,18 @@ namespace merutilm::rff2 {
 
                 for (uint64_t level = levels; level > 0; --level) {
                     const uint64_t i = level - 1;
-                    
+
                     if (periodCount[i] == 0) {
                         if constexpr (std::is_same_v<PAG, LightPAGenerator>) {
                             currentPA[i] = LightPAGenerator::create(reference, epsilon, dcMax, iteration);
                         } else {
-                            currentPA[i] = DeepPAGenerator::create(reference, epsilon, dcMax, iteration, dpTableTemps);
+                            currentPA[i] = DeepPAGenerator::create(reference, epsilon, dcMax,
+                                                                    iteration, dpTableTemps);
                         }
                     }
 
-                    if (currentPA[i] != nullptr && periodCount[i] + REQUIRED_PERTURBATION < tablePeriod[i]) {
+                    if (currentPA[i] != nullptr && 
+                        periodCount[i] + REQUIRED_PERTURBATION < tablePeriod[i]) {
                         currentPA[i]->step();
                     }
 
@@ -235,21 +232,10 @@ namespace merutilm::rff2 {
                     if (periodCount[i] == tablePeriod[i]) {
                         if (const PAG *currentLevel = currentPA[i].get();
                             currentLevel != nullptr &&
-                            currentLevel->getSkip() == tablePeriod[i] - REQUIRED_PERTURBATION
-                        ) {
+                            currentLevel->getSkip() == tablePeriod[i] - REQUIRED_PERTURBATION) {
+                            
                             const uint64_t storeIndex = currentLevel->getStart();
                             
-                            // 【重要修正 2】 allocateTableSizeを使わず、reserve無しで追加する
-                            // NO_COMPRESSION時は各インデックスに1要素しか入らないことが多いため、
-                            // levels分をreserveするとメモリが無駄になります。
-                            // 単純に push_back だけ行うことで、必要最小限(capacity=1 or 2)に留めます。
-                            
-                            while (table.size() <= storeIndex) {
-                                table.emplace_back(); 
-                            }
-
-                            // 念のため、非常に多く呼ばれるなら inner vector のキャパシティを最適化することも可能ですが、
-                            // 通常は push_back だけで最小限の確保になります。
                             table[storeIndex].push_back(currentLevel->build());
                         }
                         currentPA[i] = nullptr;
@@ -260,195 +246,137 @@ namespace merutilm::rff2 {
                         periodCount[i] = 0;
                     }
                 }
+
                 ++iteration;
                 ++absIteration;
             }
-            return; // End of Fast Path
+            return;
         }
 
-        // ========================================================================================================
-        // OPTIMIZATION: Fast Path for NO_COMPRESSION
-        // ========================================================================================================
-        if (mpaCompressionMethod == FrtMPACompressionMethod::NO_COMPRESSION) {
-            
-            // SegmentedVectorがreserveをサポートしている場合、有効化を推奨
-            // table.reserve(longestPeriod + 1); 
-
-            uint64_t absIteration = 0;
-
-            while (iteration <= longestPeriod) {
-                if (absIteration % Constants::Fractal::EXIT_CHECK_INTERVAL == 0 && state.interruptRequested()) return;
-
-                func(iteration, static_cast<double>(iteration) / static_cast<double>(longestPeriod));
-
-                bool resetLowerLevel = false;
-
-                for (uint64_t level = levels; level > 0; --level) {
-                    const uint64_t i = level - 1;
-                    
-                    if (periodCount[i] == 0) {
-                        if constexpr (std::is_same_v<PAG, LightPAGenerator>) {
-                            currentPA[i] = LightPAGenerator::create(reference, epsilon, dcMax, iteration);
-                        } else {
-                            currentPA[i] = DeepPAGenerator::create(reference, epsilon, dcMax, iteration, dpTableTemps);
-                        }
-                    }
-
-                    if (currentPA[i] != nullptr && periodCount[i] + REQUIRED_PERTURBATION < tablePeriod[i]) {
-                        currentPA[i]->step();
-                    }
-
-                    periodCount[i]++;
-
-                    if (periodCount[i] == tablePeriod[i]) {
-                        if (const PAG *currentLevel = currentPA[i].get();
-                            currentLevel != nullptr &&
-                            currentLevel->getSkip() == tablePeriod[i] - REQUIRED_PERTURBATION
-                        ) {
-                            const uint64_t storeIndex = currentLevel->getStart();
-                            
-                            // 【修正】手動ループではなくallocateTableSizeを使用して内部ベクタをreserveする
-                            // 元のコード: while (table.size() <= storeIndex) { table.emplace_back(); }
-                            // 修正後:
-                            allocateTableSize<PAB>(table, storeIndex, levels);
-
-                            table[storeIndex].push_back(currentLevel->build());
-                        }
-                        currentPA[i] = nullptr;
-                        resetLowerLevel = true;
-                    }
-
-                    if (resetLowerLevel) {
-                        periodCount[i] = 0;
-                    }
-                }
-                ++iteration;
-                ++absIteration;
-            }
-            return; // End of Fast Path
-        }
-
-
-        // ========================================================================================================
+        // ============================================================================
         // STANDARD PATH (Compression Enabled)
-        // ========================================================================================================
-
+        // ============================================================================
         uint64_t absIteration = 0;
         
-        // 元のコードにはありませんでしたが、ここでも可能ならOuter Vectorの予約を行うべきです
-        const uint64_t size = iterationToCompTableIndex(mpaCompressionMethod, *mpaPeriod, pulledMPACompressor,
-                                                        longestPeriod + 1);
-        // table.reserve(size);
-
-        allocateTableSize<PAB>(table, 0, levels);
-        const std::vector<PAB> &mainReferenceMPA = table[0]; 
+        (void)table[0];
+        
+        const std::vector<PAB> &mainReferenceMPA = table[0];
 
         while (iteration <= longestPeriod) {
-            if (absIteration % Constants::Fractal::EXIT_CHECK_INTERVAL == 0 && state.interruptRequested()) return;
+            if (absIteration % Constants::Fractal::EXIT_CHECK_INTERVAL == 0 && 
+                state.interruptRequested()) {
+                return;
+            }
 
             func(iteration, static_cast<double>(iteration) / static_cast<double>(longestPeriod));
+
             const uint64_t pulledTableIndex = iterationToPulledTableIndex(*mpaPeriod, iteration);
             const bool independent = ArrayCompressor::isIndependent(pulledMPACompressor, pulledTableIndex);
-            const uint64_t containedIndex = ArrayCompressor::containedIndex(pulledMPACompressor, pulledTableIndex + 1);
+            const uint64_t containedIndex = ArrayCompressor::containedIndex(pulledMPACompressor,
+                                                                             pulledTableIndex + 1);
+
             bool notSkippedPureZero = true;
+
             if (const ArrayCompressionTool *containedTool = containedIndex == UINT64_MAX
                                                                 ? nullptr
                                                                 : &pulledMPACompressor[containedIndex];
                 containedTool != nullptr &&
-                containedTool->start == pulledTableIndex + 1
-            ) {
-                const uint64_t level = binarySearch(tableElements, containedTool->end - containedTool->start + 2);
-
-                const uint64_t compTableIndex = iterationToCompTableIndex(mpaCompressionMethod, *mpaPeriod,
-                                                                          pulledMPACompressor, iteration);
-
-
-                allocateTableSize<PAB>(table, compTableIndex, levels);
+                containedTool->start == pulledTableIndex + 1) {
+                
+                const uint64_t level = binarySearch(tableElements,
+                                                     containedTool->end - containedTool->start + 2);
+                const uint64_t compTableIndex = iterationToCompTableIndex(mpaCompressionMethod,
+                                                                           *mpaPeriod,
+                                                                          pulledMPACompressor, 
+                                                                          iteration);
 
                 auto &pa = table[compTableIndex];
-                const PAB &mainReferencePA = mainReferenceMPA[level];
-                const uint64_t skip = mainReferencePA.skip;
-                bool valid = true;
 
-                for (uint64_t i = level + 1; i < levels; ++i) {
-                    if (i <= level && periodCount[i] != 0) {
-                        vkh::logger::w_log_err(
-                            L"WARNING : Failed to compress!! \n what : the table period count {} is not zero.",
-                            periodCount[i]);
-                        valid = false;
-                        break;
-                    }
-                    if (periodCount[i] + skip > tablePeriod[i] - REQUIRED_PERTURBATION) {
-                        vkh::logger::w_log_err(
-                            L"WARNING : Failed to compress!! \n what : the table period count {} + skip {} exceeds its period {}.",
-                            periodCount[i], skip, tablePeriod[i]);
-                        valid = false;
-                        break;
-                    }
-                }
+                if (level < mainReferenceMPA.size()) {
+                    const PAB &mainReferencePA = mainReferenceMPA[level];
+                    const uint64_t skip = mainReferencePA.skip;
 
-                if (valid) {
-                    for (uint64_t i = 0; i < levels; ++i) {
-                        if (i <= level) {
-                            pa.push_back(mainReferenceMPA[i]);
-                            uint64_t count = skip;
-                            for (uint64_t j = level; j > i; --j) {
-                                count %= tablePeriod[j - 1];
-                            }
-                            currentPA[i] = nullptr;
-                            periodCount[i] = count;
-                        } else {
-                            if (currentPA[i] == nullptr) {
-                                std::unique_ptr<PAG> generator = nullptr;
-                                if constexpr (std::is_same_v<PAG, LightPAGenerator>) {
-                                    generator = LightPAGenerator::create(reference, epsilon, dcMax, iteration);
-                                } else {
-                                    generator = DeepPAGenerator::create(reference, epsilon, dcMax, iteration,
-                                                                        dpTableTemps);
-                                }
-
-                                generator->merge(mainReferencePA);
-                                currentPA[i] = std::move(generator);
-                            } else {
-                                currentPA[i]->merge(mainReferencePA);
-                            }
-                            periodCount[i] += skip;
+                    bool valid = true;
+                    for (uint64_t i = level + 1; i < levels; ++i) {
+                        if (i <= level && periodCount[i] != 0) {
+                            vkh::logger::w_log_err(
+                                L"WARNING : Failed to compress!! \n what : the table period count {} is not zero.",
+                                periodCount[i]);
+                            valid = false;
+                            break;
+                        }
+                        if (periodCount[i] + skip > tablePeriod[i] - REQUIRED_PERTURBATION) {
+                            vkh::logger::w_log_err(
+                                L"WARNING : Failed to compress!! \n what : the table period count {} + skip {} exceeds its period {}.",
+                                periodCount[i], skip, tablePeriod[i]);
+                            valid = false;
+                            break;
                         }
                     }
 
-                    iteration += skip;
-                    notSkippedPureZero = false;
+                    if (valid) {
+                        for (uint64_t i = 0; i < levels; ++i) {
+                            if (i <= level) {
+                                pa.push_back(mainReferenceMPA[i]);
+                                uint64_t count = skip;
+                                for (uint64_t j = level; j > i; --j) {
+                                    count %= tablePeriod[j - 1];
+                                }
+                                currentPA[i] = nullptr;
+                                periodCount[i] = count;
+                            } else {
+                                if (currentPA[i] == nullptr) {
+                                    std::unique_ptr<PAG> generator = nullptr;
+                                    if constexpr (std::is_same_v<PAG, LightPAGenerator>) {
+                                        generator = LightPAGenerator::create(reference, epsilon,
+                                                                              dcMax, iteration);
+                                    } else {
+                                        generator = DeepPAGenerator::create(reference, epsilon,
+                                                                             dcMax, iteration, dpTableTemps);
+                                    }
+                                    generator->merge(mainReferencePA);
+                                    currentPA[i] = std::move(generator);
+                                } else {
+                                    currentPA[i]->merge(mainReferencePA);
+                                }
+                                periodCount[i] += skip;
+                            }
+                        }
+                        iteration += skip;
+                        notSkippedPureZero = false;
+                    }
                 }
             }
-            bool resetLowerLevel = false;
 
+            bool resetLowerLevel = false;
 
             for (uint64_t level = levels; level > 0; --level) {
                 const uint64_t i = level - 1;
+
                 if (periodCount[i] == 0 && independent && notSkippedPureZero) {
                     if constexpr (std::is_same_v<PAG, LightPAGenerator>) {
                         currentPA[i] = LightPAGenerator::create(reference, epsilon, dcMax, iteration);
                     } else {
-                        currentPA[i] = DeepPAGenerator::create(reference, epsilon, dcMax, iteration, dpTableTemps);
+                        currentPA[i] = DeepPAGenerator::create(reference, epsilon, dcMax,
+                                                                iteration, dpTableTemps);
                     }
                 }
 
-                if (currentPA[i] != nullptr && periodCount[i] + REQUIRED_PERTURBATION <
-                    tablePeriod[i]) {
+                if (currentPA[i] != nullptr && 
+                    periodCount[i] + REQUIRED_PERTURBATION < tablePeriod[i]) {
                     currentPA[i]->step();
                 }
-
 
                 periodCount[i]++;
 
                 if (periodCount[i] == tablePeriod[i]) {
                     if (const PAG *currentLevel = currentPA[i].get();
                         currentLevel != nullptr &&
-                        currentLevel->getSkip() == tablePeriod[i] - REQUIRED_PERTURBATION
-                    ) {
+                        currentLevel->getSkip() == tablePeriod[i] - REQUIRED_PERTURBATION) {
+                        
                         const uint64_t compTableIndex = iterationToCompTableIndex(
-                            mpaCompressionMethod, *mpaPeriod, pulledMPACompressor, currentLevel->getStart());
-
+                            mpaCompressionMethod, *mpaPeriod, pulledMPACompressor, 
+                            currentLevel->getStart());
 
                         if (compTableIndex == UINT64_MAX) {
                             vkh::logger::w_log_err(
@@ -457,9 +385,7 @@ namespace merutilm::rff2 {
                             return;
                         }
 
-                        allocateTableSize<PAB>(table, compTableIndex, levels);
-                        auto &pa = table[compTableIndex];
-                        pa.push_back(currentLevel->build());
+                        table[compTableIndex].push_back(currentLevel->build());
                     }
                     currentPA[i] = nullptr;
                     resetLowerLevel = true;
@@ -469,13 +395,15 @@ namespace merutilm::rff2 {
                     periodCount[i] = 0;
                 }
             }
+
             ++iteration;
             ++absIteration;
         }
     }
 
     template<typename Ref, typename Num>
-    uint64_t MPATable<Ref, Num>::iterationToPulledTableIndex(const MPAPeriod &mpaPeriod, const uint64_t iteration) {
+    uint64_t MPATable<Ref, Num>::iterationToPulledTableIndex(const MPAPeriod &mpaPeriod,
+                                                              const uint64_t iteration) {
         if (iteration == 0) {
             return UINT64_MAX;
         }
@@ -490,52 +418,37 @@ namespace merutilm::rff2 {
             if (remainder < tablePeriod[i - 1]) {
                 continue;
             }
-            if (i < tablePeriod.size() && remainder + tablePeriod[0] - REQUIRED_PERTURBATION +
-                1 > tablePeriod[i]) {
+            if (i < tablePeriod.size() && 
+                remainder + tablePeriod[0] - REQUIRED_PERTURBATION + 1 > tablePeriod[i]) {
                 return UINT64_MAX;
             }
-
-
             index += remainder / tablePeriod[i - 1] * tablePeriodElements[i - 1];
             remainder %= tablePeriod[i - 1];
         }
+
         return remainder == 1 ? index : UINT64_MAX;
     }
 
-
     template<typename Ref, typename Num>
-    uint64_t MPATable<Ref, Num>::iterationToCompTableIndex(const FrtMPACompressionMethod &mpaCompressionMethod,
-                                                           const MPAPeriod &mpaPeriod,
-                                                           const std::vector<ArrayCompressionTool> &pulledMPACompressor,
-                                                           const uint64_t iteration) {
+    uint64_t MPATable<Ref, Num>::iterationToCompTableIndex(
+        const FrtMPACompressionMethod &mpaCompressionMethod,
+        const MPAPeriod &mpaPeriod,
+        const std::vector<ArrayCompressionTool> &pulledMPACompressor,
+        const uint64_t iteration) {
+        
         switch (mpaCompressionMethod) {
-                using enum FrtMPACompressionMethod;
-            case NO_COMPRESSION: return iteration;
-            case LITTLE_COMPRESSION: return iterationToPulledTableIndex(mpaPeriod, iteration);
+            using enum FrtMPACompressionMethod;
+            case NO_COMPRESSION: 
+                return iteration;
+            case LITTLE_COMPRESSION: 
+                return iterationToPulledTableIndex(mpaPeriod, iteration);
             case STRONGEST: {
                 const uint64_t index = iterationToPulledTableIndex(mpaPeriod, iteration);
                 return index == UINT64_MAX ? UINT64_MAX : ArrayCompressor::compress(pulledMPACompressor, index);
             }
-            default: return iteration;
+            default: 
+                return iteration;
         }
     }
 
-    // 【修正】SegmentedVectorに対応しつつ、確実にreserveを行う
-    template<typename Ref, typename Num>
-    template<typename PAB>
-    void MPATable<Ref, Num>::allocateTableSize(SegmentedVector<std::vector<PAB> > &table, const uint64_t index,
-                                               const uint64_t levels) {
-        while (table.size() < index) {
-            table.emplace_back();
-        }
-        if (table.size() == index) {
-            table.emplace_back();
-            // .back() でアクセスして reserve
-            table.back().reserve(levels);
-        }
-        // 既存の要素であっても、不足していれば reserve する（安全策）
-        if (table[index].capacity() < levels) {
-            table[index].reserve(levels);
-        }
-    }
-}
+} // namespace merutilm::rff2

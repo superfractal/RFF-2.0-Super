@@ -53,6 +53,7 @@ add_executable(
         src/rff2/mrthy/ArrayCompressionTool.h
         src/rff2/mrthy/ArrayCompressor.h
 		src/rff2/mrthy/SegmentedVector.h
+		src/rff2/mrthy/SparseVector.h
         src/rff2/parallel/ParallelArrayDispatcher.h
         src/rff2/ui/Utilities.h
         src/rff2/formula/LightMandelbrotPerturbator.cpp
@@ -73,6 +74,7 @@ add_executable(
         src/rff2/ui/CallbackRender.hpp
         src/rff2/ui/CallbackShader.cpp
         src/rff2/ui/CallbackShader.hpp
+		src/rff2/ui/DarkTheme.hpp
         src/rff2/locator/MandelbrotLocator.cpp
         src/rff2/locator/MandelbrotLocator.h
         src/rff2/ui/CallbackExplore.cpp
@@ -362,6 +364,7 @@ target_link_libraries(RFF PRIVATE
         gmp
         # Win32 Linker
         comctl32
+		dwmapi
         # OpenCV Linkers
         opencv_core
         opencv_imgcodecs
