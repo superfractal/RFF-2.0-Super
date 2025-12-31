@@ -1,7 +1,7 @@
 # RFF 2.0 Super
 
 ## Project Status
-This repository is a **modified version** of the original RFF project. The main focus of this branch is to improve memory management and stability while maintaining the core performance features.
+This repository is a **modified version** of the [original RFF project](https://github.com/Merutilm/RFF-2.0) The main focus of this branch is to improve memory management and stability while maintaining the core performance features.
 
 ## RFF 2.0 Improvements
 
