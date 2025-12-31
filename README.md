@@ -1,76 +1,22 @@
-# RFF 2.0
+# RFF 2.0 Super
 
+## Project Status
+This repository is a **modified version** of the original RFF project. The main focus of this branch is to improve memory management and stability while maintaining the core performance features.
 
-## What is RFF?
+## RFF 2.0 Improvements
 
-**RFF** is an abbreviation for <u>**Ridiculously Fast Fractal**</u>.
+RFF 2.0 has been modified to significantly improve stability and memory efficiency.
+> [!NOTE]
+> As a trade-off for better memory management, rendering speed in this version is slightly slower than the standard RFF.
 
-- As the name suggests, its priority is ONLY Speed, and defaulted for the fastest settings.
+### Key Changes
+* **Optimized Memory Usage:** * Significantly reduced `MPATable` memory consumption, even when using "No compression" settings.
+    * Drastic reduction in `std::bad_alloc` errors during Period calculations using virtual memory.
+* **Enhanced UX & Safety:**
+    * **Accidental Operation Prevention:** Mouse-based position manipulation is now disabled during keyframe rendering to prevent unintended interruptions.
+    * **Revised Layout:** Updated the Explore screen button layout; the Cancel and Reset buttons have been moved to prevent accidental resets during Recompute.
+* **Better Defaults:** Initial settings have been adjusted to provide a more user-friendly experience out of the box.
 
-
-## Overview
-### Important : This program is **NOT COMPATIBLE** with **RFF(Java)** file extensions!
-
-- A program that achieves extremely fast `Power-2 Mandelbrot set`.
-
-- The application is built with the Vulkan API.
-
-- This program uses `Fast-period-guessing`*(a.k.a. FPG)* which I developed. It automatically generates the `longest period` of the selected location.
-This value is unmodifiable.
-
-- This program uses an `Multilevel Periodic Approximation` algorithm which I developed.
-It completely replaces traditional `BLA`, achieving speedups of more than 2 times. \
-To put it simply, it skips to the `Periodic point` directly.
-
-
-- You can specify a compressor to render even extremely long period using less memory. \
-Of course, the approximation table can also be compressed using this algorithm, and jumps a <u>**HUGE**</u> process! \
-Therefore, If you are trying to render long periods (over `10,000,000` or so), You should compress the references. \
-This will be <u>**SIGNIFICANTLY**</u> faster because it <u>**SUPERJUMPS**</u> process of table creation. 
-
-
-- Save amazing images using shaders!
-
-## Get Started
-
-- It's very simple. Just go into the `releases`, 
-download the zip, 
-unzip it and run it from the `bin` directory.
-
-
-## Features
-- The status bar on the window means the following (from left to right):
-
-1. The iterations of the pixel pointed to by the mouse cursor
-2. The zoom of current location.
-3. The estimated period of this location. (The number in parentheses is the length of the Reference and `MPA` array.)
-4. The elapsed time since the calculation started
-5. The Process
-
-- Video renderer is built-in!
-1. Use `Dynamic Map` or `Static Map` to generate video `keyframes`. \
-This option is in `Data Settings` in `Video` menu.
-2. `Dynamic Map` stores whole iteration data each pixel. It requires large capacity. \
-the extension is `.rfm`.
-3. `Static Map` stores as `image` and `info` files. It requires less capacity but also the most `shaders` are disabled. \
-the extension of `info` file is `.rfsm`.
-4. Export your own Video using existing `keyframes`.
-
-
-- Find the nearest Minibrot with `Locate Minibrot` in `Explore` menu.
-
-- More features will be added soon.
-
-
-## Known Issues & Problems
-- The program was compiled with -Ofast, so sometimes results incorrect image at some location.
-- This is weak for complex spiral patterns and mandelbrot plane, because there are only formulas for the  recursive julia sets.  
-  I will add that formulas in the future.
-- The `Locate Minibrot` algorithm is currently inefficient. It is 50% slower than `kf2`.
-
-- An issue occurs where the reference calculation slows down unusually at the certain very deep locations.
-
-- No viable algorithms for interior detection(Coming soon). 
-it will slow down the speed for interior pixels.
-
-- I will do my best to accelerate as reference calculations account for more than 90% of the total
+### Performance Tuning
+* **LightMandelbrotPerturbator.cpp:** Provides approximately 10% faster rendering compared to the standard RFF.
+* **MPATable.h:** Modifying this file can further reduce memory usage when using No compression.
