@@ -19,4 +19,3 @@ RFF 2.0 Super has been modified to significantly improve stability and memory ef
 
 ### Performance Tuning
 * **LightMandelbrotPerturbator.cpp:** Provides approximately 10% faster rendering compared to the standard RFF.
-* **MPATable.h:** Modifying this file can further reduce memory usage when using No compression.
